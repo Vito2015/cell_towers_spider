@@ -21,18 +21,27 @@ _default_outfile = os.path.join(os.path.curdir, 'results/cell_towers_{}.csv'.for
 parser = argparse.ArgumentParser(usage='cellfetch <options>',
                                  description='a web spider used for fetching cell towers coordinates')
 
-parser.add_argument('-f', '--file', type=str,
-                    help="source csv file with 'mcc','mnc','lac','cid' columns. ")
+normal_options = parser.add_argument_group('normal options')
 
-parser.add_argument('-o', '--out', type=str,
-                    default=_default_outfile,
-                    help="output file;\
-                    result csv file will with 'mcc','mnc','lac','cid','lat','lon' and other columns.\
-                     (default '{}')".format(_default_outfile))
+normal_options.add_argument('-f', '--file', type=str,
+                            help="source csv file with 'mcc','mnc','lac','cid' columns. ")
 
-parser.add_argument('-s', '--sleep-time', type=int, default=1*60,
-                    help="a integer number; when api response '403',\
-                     cellfetch process will sleep some seconds (default 60s).")
+normal_options.add_argument('--line', type=int, default=-1, help="a integer number; read [--file] begin at [--line].")
+
+normal_options.add_argument('-o', '--out', type=str,
+                            default=_default_outfile,
+                            help="output file;\
+                            result csv file will with 'mcc','mnc','lac','cid','lat','lon' and other columns.\
+                            (default '{}')".format(_default_outfile))
+
+normal_options.add_argument('-s', '--sleep-time', type=int, default=1*60,
+                            help="a integer number; when api response '403',\
+                            cellfetch process will sleep some seconds (default 60s).")
+
+check_options = parser.add_argument_group('check options')
+
+check_options.add_argument('-c', '--check-line', type=int, default=0,
+                           help="a integer number; used for checking [-c] line's position at the [--file].")
 
 args, remaining = parser.parse_known_args(sys.argv)
 
@@ -44,6 +53,9 @@ class SpiderCursor(object):
         self.f = open('spider.lock', mode='r+')
 
     def read(self):
+        self.f.close()
+        self.f = open('spider.lock', mode='r+')
+
         lines = self.f.readlines()
         lines.extend(['0' for _ in range(2 - len(lines))])
         if PY_VERSION >= 3:
@@ -55,7 +67,8 @@ class SpiderCursor(object):
 
     def write(self, ln, pos):
         self.f.seek(0)
-        self.f.writelines([str(ln), '\n', str(pos)])
+        self.f.truncate(0)
+        self.f.writelines([str(ln), '\n', str(pos)])  # TODO need clear file body then write
         self.f.flush()
 
     def close(self):
@@ -198,7 +211,11 @@ def csv_writer(filename):
     return f, writer
 
 
-def main():
+def run_fetching():
+    log.info('source file: %s' % _source_file)
+    log.info('output file: %s' % _target_file)
+    log.info('sleep time: %ss' % _sleep_time)
+
     q = Queue()
     reader = csv_reader(_source_file)
     f_w, writer = csv_writer(_target_file)
@@ -222,7 +239,23 @@ def main():
     f_w.close()
 
 
-def init_params():
+def get_position(line):
+    """Returns a integer; the position of source file at specified line"""
+    ln = 0
+    with open(_source_file, mode='r') as f:
+        while ln < line:
+            f.readline()  # if used next(f) then cannot tell() it
+            ln += 1
+        return f.tell()
+
+
+def run_checking(check_line):
+    log.debug('>>>>>>checking source file: %s' % _source_file)
+    log.debug('>>>>>>checking line: %s' % check_line)
+    log.info('line: %s ---> position: %s' % (check_line, get_position(check_line)))
+
+
+def run():
     # print(args)
     global _source_file, _target_file, _sleep_time
 
@@ -230,16 +263,27 @@ def init_params():
     _target_file = args.out
     _sleep_time = args.sleep_time
 
-    if _source_file is None:
+    begin_line = args.line
+    check_line = args.check_line
+
+    if _source_file is None and check_line == 0:
         parser.print_help()
         exit(0)
 
+    if check_line != 0:
+        if check_line < 0:
+            parser.print_help()
+            parser.error("[--check-line] need > 0.")  # exit with code 2
+        run_checking(check_line)
+    else:
+        if begin_line >= 0:
+            pos = get_position(begin_line)
+            _cursor.write(begin_line, pos)
+        elif begin_line != -1:
+            parser.print_help()
+            parser.error("[--line] need >= 0.")  # exit with code 2
+
+        run_fetching()
 
 if __name__ == '__main__':
-    # if len(sys.argv) > 1:
-    #     _source_file = sys.argv[1]
-    init_params()
-    log.info('source file: %s' % _source_file)
-    log.info('output file: %s' % _target_file)
-    log.info('sleep time: %ss' % _sleep_time)
-    main()
+    run()
