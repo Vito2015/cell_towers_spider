@@ -1,14 +1,40 @@
 # coding: utf-8
 
+import os
+import sys
 import csv
 import json
 import time
+import argparse
 from datetime import datetime
-import os
-import sys
 from urllib.request import Request, urlopen
 from urllib.error import URLError
 from queue import Queue
+from pyextend.core import log
+
+log.set_logger(filename=os.path.join(os.path.curdir, './logs/cellfetch.log'), with_filehandler=True)
+
+PY_VERSION = sys.version_info[0]
+
+_default_outfile = os.path.join(os.path.curdir, 'results/cell_towers_{}.csv'.format(datetime.now().strftime('%Y%m%d')))
+
+parser = argparse.ArgumentParser(usage='cellfetch <options>',
+                                 description='a web spider used for fetching cell towers coordinates')
+
+parser.add_argument('-f', '--file', type=str,
+                    help="source csv file with 'mcc','mnc','lac','cid' columns. ")
+
+parser.add_argument('-o', '--out', type=str,
+                    default=_default_outfile,
+                    help="output file;\
+                    result csv file will with 'mcc','mnc','lac','cid','lat','lon' and other columns.\
+                     (default '{}')".format(_default_outfile))
+
+parser.add_argument('-s', '--sleep-time', type=int, default=1*60,
+                    help="a integer number; when api response '403',\
+                     cellfetch process will sleep some seconds (default 60s).")
+
+args, remaining = parser.parse_known_args(sys.argv)
 
 
 class SpiderCursor(object):
@@ -18,11 +44,18 @@ class SpiderCursor(object):
         self.f = open('spider.lock', mode='r+')
 
     def read(self):
-        return int(self.f.readline() or 0)
+        lines = self.f.readlines()
+        lines.extend(['0' for _ in range(2 - len(lines))])
+        if PY_VERSION >= 3:
+            line_no, pos, *other = lines
+        else:
+            line_no = lines[0]
+            pos = lines[1]
+        return int(line_no or 0), int(pos or 0)
 
-    def write(self, offset):
+    def write(self, ln, pos):
         self.f.seek(0)
-        self.f.write(str(offset))
+        self.f.writelines([str(ln), '\n', str(pos)])
         self.f.flush()
 
     def close(self):
@@ -34,7 +67,7 @@ _headers = {
     # 'cookie': cookies_str
 }
 
-OUT_PUT = 'json'  # or 'csv'
+OUT_PUT = 'json'  # or 'csv' or 'xml
 BASE_URL = 'http://www.cellocation.com/cell/?coord=gcj02&output=%s&mcc={}&mnc={}&lac={}&ci={}' % OUT_PUT
 ERR_CODES = {
     10000: '查询参数错误',
@@ -43,7 +76,9 @@ ERR_CODES = {
 }
 
 _sleep_time = 1 * 60
-_source_file = '/home/mi/tmpdata/mongodb/test.csv'  # '/home/mi/tmpdata/mongodb/cell_key_china.csv'
+_source_file = None
+# '/home/mi/tmpdata/mongodb/cell_key_china.csv'
+#  '/home/mi/tmpdata/mongodb/cell_key_china.csv' test.csv
 _target_file = os.path.join(os.path.curdir,  # '../',
                             'results/cell_towers_{}.csv'.format(datetime.now().strftime('%Y%m%d')))
 
@@ -69,8 +104,8 @@ def spider(cell_code, headers=_headers):
 
         errcode = data.pop('errcode')
         if errcode != 0 and errcode in ERR_CODES.keys():
-            print('!!!!!!DataError: ', 'url={}, errcode={}, errmsg={}'
-                  .format(url, errcode, ERR_CODES[errcode]))
+            log.error('!!!!!!DataError: ', 'url={}, errcode={}, errmsg={}'
+                      .format(url, errcode, ERR_CODES[errcode]))
             return None
         return data
 
@@ -82,14 +117,14 @@ def spider(cell_code, headers=_headers):
     try:
         response = urlopen(req)
     except URLError as e:
-        if hasattr(e, 'reason'):
-            print('We failed to reach a server. reason={}'.format(e.reason))
-        elif hasattr(e, 'code'):
+        if hasattr(e, 'code'):
             if e.code in ERR_CODES.keys():
-                print('!!!!!!RequestError: status={}, errmsg={}'.format(e.code, ERR_CODES[e.code]))
+                log.error('!!!!!!RequestError: status={}, errmsg={}'.format(e.code, ERR_CODES[e.code]))
                 return e.code
             else:
-                print('!!!!!!RequestError: The server couldn\'t fulfill the request. status={}'.format(e.code))
+                log.error('!!!!!!RequestError: The server couldn\'t fulfill the request. status={}'.format(e.code))
+        elif hasattr(e, 'reason'):
+            log.error('We failed to reach a server. reason={}'.format(e.reason))
     else:
         data = response.read().decode("utf8")
         data = verify_data(url, data)
@@ -124,23 +159,33 @@ def test():
 
 
 def csv_reader(filename):
-    pos = _cursor.read()
+    ln, pos = _cursor.read()
+    tmp_ln = ln
+
     with open(filename, mode='r+') as f:
         if pos > 0:
             f.seek(pos)
-        print('begin pos %s' % pos)
+        log.info('begin line_no=%s, position=%s' % (ln, pos))
+
+        next_row_len = len(f.readline())
+        f.seek(pos)
         reader = csv.DictReader(f, fieldnames=['mcc', 'mnc', 'lac', 'cid'])
         for line in reader:
-            # if reader.line_num == 1:
-            #     pos += len(''.join(line.values()))
-            #     print('current pos %s' % pos)
-            #     continue
-            yield reader.line_num, line
-            pos += len(','.join(line.values()))+1  # +1 ,because has \n
-            print('current pos %s' % pos)
-            _cursor.write(pos)
-        _cursor.write(f.tell())
-        print('end pos %s' % f.tell())
+            tmp_ln = (ln-1) + reader.line_num
+            if tmp_ln > 0:
+                d = dict()
+                d['mcc'] = line['mcc']
+                d['mnc'] = line['mnc']
+                d['lac'] = line['lac']
+                d['cid'] = line['cid']
+                yield tmp_ln, d
+            pos += next_row_len
+            tmp_ln += 1
+            log.info('next line=%s, position=%s' % (tmp_ln, pos))
+            _cursor.write(tmp_ln, pos)
+            next_row_len = len(f.readline())
+            f.seek(pos)
+        log.info('end pos %s' % f.tell())
 
 
 def csv_writer(filename):
@@ -163,21 +208,38 @@ def main():
         # print('qsize={}'.format(q.qsize()))
         while q.qsize() > 0:
             current_code = q.get()
-            print('>>>>>>NO.{} current_code={}'.format(idx, current_code))
+            log.info('>>>>>>NO.{} current_code={}'.format(idx, current_code))
             d = spider(current_code)
             if isinstance(d, dict):
-                print(d)
+                log.debug(d)
                 writer.writerow(d)
                 f_w.flush()
             elif d == 403 and d in ERR_CODES.keys():
                 q.put(current_code)
-                print('sleep {}s'.format(_sleep_time))
+                log.warning('sleep {}s'.format(_sleep_time))
                 time.sleep(_sleep_time)
-    print('Done')
+    log.info('Done')
     f_w.close()
 
+
+def init_params():
+    # print(args)
+    global _source_file, _target_file, _sleep_time
+
+    _source_file = args.file
+    _target_file = args.out
+    _sleep_time = args.sleep_time
+
+    if _source_file is None:
+        parser.print_help()
+        exit(0)
+
+
 if __name__ == '__main__':
-    if len(sys.argv) > 1:
-        _source_file = sys.argv[1]
-    print('source file: %s' % _source_file)
+    # if len(sys.argv) > 1:
+    #     _source_file = sys.argv[1]
+    init_params()
+    log.info('source file: %s' % _source_file)
+    log.info('output file: %s' % _target_file)
+    log.info('sleep time: %ss' % _sleep_time)
     main()
