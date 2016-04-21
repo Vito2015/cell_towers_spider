@@ -63,4 +63,6 @@ target/
 
 .idea/
 results/
+logs/
 spider.lock
+*.csv

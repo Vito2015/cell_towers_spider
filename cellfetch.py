@@ -101,7 +101,9 @@ _cursor = SpiderCursor()
 def spider(cell_code, headers=_headers):
 
     def gen_url(code):
-        return BASE_URL.format(code['mcc'], code['mnc'], code['lac'], code['cid'])
+        def get_code(name):
+            return code[name] or ''
+        return BASE_URL.format(get_code('mcc'), get_code('mnc'), get_code('lac'), get_code('cid'))
 
     def verify_data(url, s):
         if OUT_PUT == 'json':
@@ -117,8 +119,8 @@ def spider(cell_code, headers=_headers):
 
         errcode = data.pop('errcode')
         if errcode != 0 and errcode in ERR_CODES.keys():
-            log.error('!!!!!!DataError: ', 'url={}, errcode={}, errmsg={}'
-                      .format(url, errcode, ERR_CODES[errcode]))
+            # print('\n!!!!!!DataError: ', 'url={}, errcode={}, errmsg={}'.format(url, errcode, ERR_CODES[errcode]))
+            log.error('!!!!!!DataError: url={}, errcode={}, errmsg={}'.format(url, errcode, ERR_CODES[errcode]))
             return None
         return data
 
