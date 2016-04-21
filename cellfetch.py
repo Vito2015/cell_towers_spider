@@ -1,4 +1,17 @@
 # coding: utf-8
+"""
+    cellfetch.py
+    ~~~~~~~~~~~~
+
+    cell towers location spider.
+
+    Data From: cellocation.com
+    Coord Type: gcj02
+    see link <http://baike.baidu.com/link?url=Q_CyKgQIOdKwdF0FOMIuGY2UbrlYtClUrYny73GNM4lcGQuDGw6GaBzU5ja_qti_pqZFRE2mFiyNosqDwLZasK>
+    for more details.
+    Author: Vito
+    Date: 2016-04-20 20:51
+"""
 
 import os
 import sys
@@ -11,6 +24,7 @@ from urllib.request import Request, urlopen
 from urllib.error import URLError
 from queue import Queue
 from pyextend.core import log
+from pyextend.core.itertools import merge
 
 log.set_logger(filename=os.path.join(os.path.curdir, './logs/cellfetch.log'), with_filehandler=True)
 
@@ -81,7 +95,12 @@ _headers = {
 }
 
 OUT_PUT = 'json'  # or 'csv' or 'xml
+
+# usual conditions we use 'BASE_URL' , and 'BASE_URL2' for back up
+# the 'BASE_URL2' param-> 96 (default) is ASU or dBm
 BASE_URL = 'http://www.cellocation.com/cell/?coord=gcj02&output=%s&mcc={}&mnc={}&lac={}&ci={}' % OUT_PUT
+BASE_URL2 = 'http://api.cellocation.com/loc/?coord=gcj02&output=%s&cl={},{},{},{},96' % OUT_PUT
+
 ERR_CODES = {
     10000: '查询参数错误',
     10001: '无基站数据',
@@ -98,12 +117,13 @@ _target_file = os.path.join(os.path.curdir,  # '../',
 _cursor = SpiderCursor()
 
 
-def spider(cell_code, headers=_headers):
+def spider(cell_code, headers=_headers, **kwargs):
 
     def gen_url(code):
         def get_code(name):
             return code[name] or ''
-        return BASE_URL.format(get_code('mcc'), get_code('mnc'), get_code('lac'), get_code('cid'))
+        url_fmt = kwargs.get('url') or BASE_URL
+        return url_fmt.format(get_code('mcc'), get_code('mnc'), get_code('lac'), get_code('cid'))
 
     def verify_data(url, s):
         if OUT_PUT == 'json':
@@ -124,8 +144,8 @@ def spider(cell_code, headers=_headers):
             return None
         return data
 
-    def merge(result, code):
-        return dict(result, **code)
+    # def merge(result, code):
+    #     return dict(result, **code)
 
     url = gen_url(cell_code)
     req = Request(url, headers=headers)
@@ -233,7 +253,15 @@ def run_fetching():
                 log.debug(d)
                 writer.writerow(d)
                 f_w.flush()
+                continue
             elif d == 403 and d in ERR_CODES.keys():
+                # try backup url
+                d = spider(current_code, url=BASE_URL2)
+                if isinstance(d, dict):
+                    log.debug(d)
+                    writer.writerow(d)
+                    f_w.flush()
+                    continue
                 q.put(current_code)
                 log.warning('sleep {}s'.format(_sleep_time))
                 time.sleep(_sleep_time)
