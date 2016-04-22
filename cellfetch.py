@@ -14,6 +14,7 @@
 """
 
 import os
+import re
 import sys
 import csv
 import json
@@ -47,6 +48,8 @@ normal_options.add_argument('-o', '--out', type=str,
                             help="output file;\
                             result csv file will with 'mcc','mnc','lac','cid','lat','lon' and other columns.\
                             (default '{}')".format(_default_outfile))
+
+normal_options.add_argument('--gen-key', type=bool, default=False, help="can generate key field at output file ")
 
 normal_options.add_argument('-s', '--sleep-time', type=int, default=1*60,
                             help="a integer number; when api response '403',\
@@ -107,6 +110,10 @@ ERR_CODES = {
     403: '每日查询超限',
 }
 
+ENCODE_STR = '%03x%04x%08x%08x'
+DECODE_REG = re.compile('^([0-9a-f]{3})([0-9a-f]{4})([0-9a-f]{8})([0-9a-f]{8})$')
+
+_is_gen_key = False
 _sleep_time = 1 * 60
 _source_file = None
 # '/home/mi/tmpdata/mongodb/cell_key_china.csv'
@@ -140,6 +147,9 @@ def spider(cell_code, headers=_headers, **kwargs):
             data['radius'] = result[3]
             data['address'] = result[4]
 
+        # if 'radio' not in data.keys():
+        #     data['radio'] = ''
+
         try:
             errcode = data.pop('errcode')
         except KeyError:
@@ -170,6 +180,26 @@ def spider(cell_code, headers=_headers, **kwargs):
         data = response.read().decode("utf8")
         data = verify_data(url, data)
         return merge(data, cell_code) if data is not None else None
+
+
+class ParseCellKeyError(AttributeError):
+    pass
+
+
+def cell_pk(**kwargs):
+    return ENCODE_STR % (kwargs['mcc'], kwargs['mnc'], kwargs['lac'], kwargs['cid'])
+
+
+def parse_cell_pk(string):
+    try:
+        mcc, mnc, lac, cid = DECODE_REG.match(string).groups()
+    except AttributeError:
+        raise ParseCellKeyError('Wrong cell key format: {0}'.format(string))
+    mcc = int(mcc, base=16)
+    mnc = int(mnc, base=16)
+    lac = int(lac, base=16)
+    cid = int(cid, base=16)
+    return mcc, mnc, lac, cid
 
 
 def test():
@@ -233,7 +263,7 @@ def csv_writer(filename):
     if not os.path.exists(os.path.dirname(filename)):
         os.mkdir(os.path.dirname(filename))
     f = open(filename, mode='a+')
-    writer = csv.DictWriter(f, fieldnames=['mcc', 'mnc', 'lac', 'cid', 'lat', 'lon', 'address', 'radius'])
+    writer = csv.DictWriter(f, fieldnames=['key', 'mcc', 'mnc', 'lac', 'cid', 'lat', 'lon', 'address', 'radius'])
     if f.tell() == 0:
         writer.writeheader()
     return f, writer
@@ -247,6 +277,15 @@ def run_fetching():
     q = Queue()
     reader = csv_reader(_source_file)
     f_w, writer = csv_writer(_target_file)
+
+    def write_data(data, is_gen_key):
+        if is_gen_key:
+            key = cell_pk(**data)
+            data['key'] = key
+        log.debug(data)
+        writer.writerow(data)
+        f_w.flush()
+
     for idx, code in reader:
         # print(code)
         q.put(code)
@@ -256,17 +295,13 @@ def run_fetching():
             log.info('>>>>>>NO.{} current_code={}'.format(idx, current_code))
             d = spider(current_code)
             if isinstance(d, dict):
-                log.debug(d)
-                writer.writerow(d)
-                f_w.flush()
+                write_data(d, is_gen_key=_is_gen_key)
                 continue
             elif d == 403 and d in ERR_CODES.keys():
                 # try backup url
                 d = spider(current_code, url=BASE_URL2)
                 if isinstance(d, dict):
-                    log.debug(d)
-                    writer.writerow(d)
-                    f_w.flush()
+                    write_data(d, is_gen_key=_is_gen_key)
                     continue
                 q.put(current_code)
                 log.warning('sleep {}s'.format(_sleep_time))
@@ -293,7 +328,7 @@ def run_checking(check_line):
 
 def run():
     # print(args)
-    global _source_file, _target_file, _sleep_time
+    global _source_file, _target_file, _sleep_time, _is_gen_key
 
     _source_file = args.file
     _target_file = args.out
@@ -301,6 +336,8 @@ def run():
 
     begin_line = args.line
     check_line = args.check_line
+
+    _is_gen_key = args.gen_key
 
     if _source_file is None and check_line == 0:
         parser.print_help()
