@@ -123,7 +123,10 @@ def spider(cell_code, headers=_headers, **kwargs):
         def get_code(name):
             return code[name] or ''
         url_fmt = kwargs.get('url') or BASE_URL
-        return url_fmt.format(get_code('mcc'), get_code('mnc'), get_code('lac'), get_code('cid'))
+        try:
+            return url_fmt % (get_code('mcc'), get_code('mnc'), get_code('lac'), get_code('cid'))
+        except TypeError:
+            return url_fmt.format(get_code('mcc'), get_code('mnc'), get_code('lac'), get_code('cid'))
 
     def verify_data(url, s):
         if OUT_PUT == 'json':
@@ -137,7 +140,10 @@ def spider(cell_code, headers=_headers, **kwargs):
             data['radius'] = result[3]
             data['address'] = result[4]
 
-        errcode = data.pop('errcode')
+        try:
+            errcode = data.pop('errcode')
+        except KeyError:
+            return data
         if errcode != 0 and errcode in ERR_CODES.keys():
             # print('\n!!!!!!DataError: ', 'url={}, errcode={}, errmsg={}'.format(url, errcode, ERR_CODES[errcode]))
             log.error('!!!!!!DataError: url={}, errcode={}, errmsg={}'.format(url, errcode, ERR_CODES[errcode]))
