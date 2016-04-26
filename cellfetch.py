@@ -49,7 +49,9 @@ normal_options.add_argument('-o', '--out', type=str,
                             result csv file will with 'mcc','mnc','lac','cid','lat','lon' and other columns.\
                             (default '{}')".format(_default_outfile))
 
-normal_options.add_argument('--gen-key', type=bool, default=False, help="can generate key field at output file ")
+normal_options.add_argument('--key', action='store_true',
+                            default=False,
+                            help="can generate key field at output file ")
 
 normal_options.add_argument('-s', '--sleep-time', type=int, default=1*60,
                             help="a integer number; when api response '403',\
@@ -97,12 +99,14 @@ _headers = {
     # 'cookie': cookies_str
 }
 
+COORD = 'wgs84'
 OUT_PUT = 'json'  # or 'csv' or 'xml
 
 # usual conditions we use 'BASE_URL' , and 'BASE_URL2' for back up
 # the 'BASE_URL2' param-> 96 (default) is ASU or dBm
-BASE_URL = 'http://www.cellocation.com/cell/?coord=gcj02&output=%s&mcc={}&mnc={}&lac={}&ci={}' % OUT_PUT
-BASE_URL2 = 'http://api.cellocation.com/loc/?coord=gcj02&output=%s&cl={},{},{},{},96' % OUT_PUT
+# 坐标类型(wgs84/gcj02/bd09)，默认wgs84
+BASE_URL = 'http://api.cellocation.com/cell/?coord=%s&output=%s&mcc={}&mnc={}&lac={}&ci={}' % (COORD, OUT_PUT)
+BASE_URL2 = 'http://api.cellocation.com/loc/?coord=%s&output=%s&cl={},{},{},{},96' % (COORD, OUT_PUT)
 
 ERR_CODES = {
     10000: '查询参数错误',
@@ -187,7 +191,7 @@ class ParseCellKeyError(AttributeError):
 
 
 def cell_pk(**kwargs):
-    return ENCODE_STR % (kwargs['mcc'], kwargs['mnc'], kwargs['lac'], kwargs['cid'])
+    return ENCODE_STR % (int(kwargs['mcc']), int(kwargs['mnc']), int(kwargs['lac']), int(kwargs['cid']))
 
 
 def parse_cell_pk(string):
@@ -337,7 +341,7 @@ def run():
     begin_line = args.line
     check_line = args.check_line
 
-    _is_gen_key = args.gen_key
+    _is_gen_key = args.key
 
     if _source_file is None and check_line == 0:
         parser.print_help()
